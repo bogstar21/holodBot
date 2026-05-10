@@ -1,6 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 
-const TOKEN = process.env.BOT_TOKEN;
+const TOKEN = process.env.TOKEN;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -9,8 +9,8 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 const mainMenu = {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "📦 Button 1", callback_data: "menu_1" }],
-      [{ text: "📋 Button 2", callback_data: "menu_2" }],
+      [{ text: "📦 Агент", callback_data: "menu_1" }],
+      [{ text: "📋 Продавец", callback_data: "menu_2" }],
     ],
   },
 };
@@ -18,19 +18,19 @@ const mainMenu = {
 const subMenu1 = {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "🔗 Button 1.1", url: "https://your-link-1-1.com" }],
-      [{ text: "🔗 Button 1.2", url: "https://your-link-1-2.com" }],
-      [{ text: "⬅️ Back", callback_data: "back_main" }],
-    ],
+      [{ text: "🔗 Анкета 1", url: "https://docs.google.com/forms/d/e/1FAIpQLSeD_200PL2CF1L5ORSzbR4tDCwB1-Oo9ugy3xQO0BbuoBqosQ/viewform?pli=1" }],
+      [{ text: "🔗 Анкета 2", url: "https://docs.google.com/forms/d/e/1FAIpQLScS2v4mJcXW1U6cMymh1tJ6XbFhH0x4W341o3JkG0h6R800pA/viewform?pli=1" }],
+      [{ text: "⬅️ Назад", callback_data: "back_main" }],
+    ]
   },
 };
 
 const subMenu2 = {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "🔗 Button 2.1", url: "https://your-link-2-1.com" }],
-      [{ text: "🔗 Button 2.2", url: "https://your-link-2-2.com" }],
-      [{ text: "⬅️ Back", callback_data: "back_main" }],
+      [{ text: "🔗 Анкета 1", url: "https://docs.google.com/forms/d/e/1FAIpQLSeD_200PL2CF1L5ORSzbR4tDCwB1-Oo9ugy3xQO0BbuoBqosQ/viewform?pli=1" }],
+      [{ text: "🔗 Анкета 2", url: "https://docs.google.com/forms/d/e/1FAIpQLScS2v4mJcXW1U6cMymh1tJ6XbFhH0x4W341o3JkG0h6R800pA/viewform?pli=1" }],
+      [{ text: "⬅️ Назад", callback_data: "back_main" }],
     ],
   },
 };
@@ -40,10 +40,9 @@ const subMenu2 = {
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
 
-  // ✏️ Customize your welcome message here
   bot.sendMessage(
     chatId,
-    "👋 Welcome! Please choose an option below:",
+    "👋 Привет! Выбери анкету для заполнения:",
     mainMenu
   );
 });
@@ -55,11 +54,10 @@ bot.on("callback_query", (query) => {
   const messageId = query.message.message_id;
   const data = query.data;
 
-  // Always acknowledge the callback to remove the "loading" state
   bot.answerCallbackQuery(query.id);
 
   if (data === "menu_1") {
-    bot.editMessageText("📦 *Button 1* — Choose a link:", {
+    bot.editMessageText("📦 Выберите анкету:", {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "Markdown",
@@ -68,7 +66,7 @@ bot.on("callback_query", (query) => {
   }
 
   if (data === "menu_2") {
-    bot.editMessageText("📋 *Button 2* — Choose a link:", {
+    bot.editMessageText("📋 Выберите анкету:", {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "Markdown",
@@ -77,7 +75,7 @@ bot.on("callback_query", (query) => {
   }
 
   if (data === "back_main") {
-    bot.editMessageText("👋 Welcome! Please choose an option below:", {
+    bot.editMessageText("👋 Выберите анкету для заполнения:", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: mainMenu.reply_markup,
