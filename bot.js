@@ -276,8 +276,8 @@ http.createServer((req, res) => {
   // GET /sessions/latest?minutes=30
   // Returns the most recent session within the given time window
   if (req.method === "GET" && req.url.startsWith("/sessions/latest")) {
-    const urlParams = new URL(req.url, "http://localhost");
-    const minutes = parseInt(urlParams.get("minutes") || "30");
+    const urlParams = new URL(req.url, "http://localhost:3000");
+    const minutes = parseInt(urlParams.searchParams.get("minutes") || "30");
     const windowMs = minutes * 60 * 1000;
     const now = Date.now();
 
