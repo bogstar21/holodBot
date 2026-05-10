@@ -34,7 +34,6 @@ const subMenu2 = {
   },
 };
 
-// ─── /start command ───────────────────────────────────────────────────────────
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
