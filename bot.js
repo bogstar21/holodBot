@@ -69,19 +69,10 @@ const subMenu2 = {
   },
 };
 
-const skipPhotoKeyboard = {
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: "➡️ Пропустити фото", callback_data: "skip_photos" }],
-    ],
-  },
-};
-
 const donePhotoKeyboard = {
   reply_markup: {
     inline_keyboard: [
       [{ text: "✅ Готово, далі", callback_data: "done_photos" }],
-      [{ text: "➡️ Пропустити фото", callback_data: "skip_photos" }],
     ],
   },
 };
@@ -103,8 +94,6 @@ bot.on("callback_query", (query) => {
   const data = query.data;
 
   bot.answerCallbackQuery(query.id);
-
-  // ── Main menu navigation ──────────────────────────────────────────────────
 
   if (data === "menu_1") {
     bot.editMessageText("📦 *Агент* — готові заповнити анкету?", {
@@ -132,13 +121,11 @@ bot.on("callback_query", (query) => {
     });
   }
 
-  // ── Start flow ────────────────────────────────────────────────────────────
-
   if (data === "start_flow") {
     setUserState(userId, { step: "waiting_location", photos: [] });
     bot.sendMessage(
       chatId,
-      "📍 *Крок 1 з 2 — Геолокація*\n\nНадішліть вашу поточну геолокацію.\n\nНатисніть скріпку 📎 → *Геолокація*",
+      "📍 *Крок 1 з 2 — Геолокація*\n\nНадішліть вашу поточну геолокацію.\n\nНатисніть кнопку нижче 👇",
       {
         parse_mode: "Markdown",
         reply_markup: {
@@ -148,14 +135,6 @@ bot.on("callback_query", (query) => {
         },
       }
     );
-  }
-
-  // ── Skip / done photos ────────────────────────────────────────────────────
-
-  if (data === "skip_photos") {
-    const userState = getUserState(userId);
-    setUserState(userId, { step: "idle" });
-    _sendFormLink(chatId, userId, userState.location, []);
   }
 
   if (data === "done_photos") {
@@ -185,11 +164,11 @@ bot.on("location", (msg) => {
 
   bot.sendMessage(
     chatId,
-    `✅ Геолокацію отримано!\n\n📸 *Крок 2 з 2 — Фото*\n\nНадішліть фото обладнання (можна кілька).\nКоли закінчите — натисніть *Готово*.`,
+    "✅ Геолокацію отримано!\n\n📸 *Крок 2 з 2 — Фото*\n\nНадішліть фото обладнання (можна кілька).\nКоли закінчите — натисніть *Готово*.",
     { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
   );
 
-  bot.sendMessage(chatId, "Надсилайте фото:", skipPhotoKeyboard);
+  bot.sendMessage(chatId, "Надсилайте фото 👇", donePhotoKeyboard);
 });
 
 // ─── PHOTOS ──────────────────────────────────────────────────────────────────
@@ -201,7 +180,6 @@ bot.on("photo", (msg) => {
 
   if (userState.step !== "waiting_photos") return;
 
-  // Take the highest resolution version
   const fileId = msg.photo[msg.photo.length - 1].file_id;
   const photos = userState.photos || [];
   photos.push(fileId);
@@ -239,7 +217,7 @@ function _sendFormLink(chatId, userId, location, photos) {
     }
   );
 
-  // Save session data for matching with form submission later
+  // Save session data
   const sessionData = {
     userId,
     timestamp: new Date().toISOString(),
@@ -247,7 +225,6 @@ function _sendFormLink(chatId, userId, location, photos) {
     photos: photos || [],
   };
 
-  // Append to sessions log
   const sessionsFile = path.join(__dirname, "sessions.json");
   let sessions = [];
   try {
@@ -256,7 +233,6 @@ function _sendFormLink(chatId, userId, location, photos) {
     }
   } catch (e) { }
   sessions.push(sessionData);
-  // Keep only last 200 sessions
   if (sessions.length > 200) sessions = sessions.slice(-200);
   fs.writeFileSync(sessionsFile, JSON.stringify(sessions, null, 2));
 }
@@ -268,21 +244,18 @@ bot.on("message", (msg) => {
   const userId = msg.from.id;
   const userState = getUserState(userId);
 
-  // Ignore location and photo messages (handled above)
   if (msg.location || msg.photo) return;
 
-  // If user sends text while we're waiting for location or photo
   if (userState.step === "waiting_location") {
     bot.sendMessage(chatId, "📍 Будь ласка, надішліть геолокацію за допомогою кнопки нижче.");
     return;
   }
 
   if (userState.step === "waiting_photos") {
-    bot.sendMessage(chatId, "📸 Надішліть фото або натисніть *Готово* / *Пропустити*.", { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, "📸 Надішліть фото або натисніть *Готово*.", { parse_mode: "Markdown" });
     return;
   }
 
-  // Default: show main menu
   if (msg.text && !msg.text.startsWith("/")) {
     bot.sendMessage(chatId, "👋 Виберіть вашу роль:", mainMenu);
   }
@@ -291,4 +264,4 @@ bot.on("message", (msg) => {
 const http = require("http");
 http.createServer((req, res) => res.end("ok")).listen(process.env.PORT || 3000);
 
-console.log("🤖 Bot is running..."); 
+console.log("🤖 Bot is running...");
