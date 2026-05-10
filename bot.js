@@ -15,8 +15,8 @@ const mainMenu = {
 const subMenu1 = {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "🔗 Анкета 1", url: "https://docs.google.com/forms/d/e/1FAIpQLSeD_200PL2CF1L5ORSzbR4tDCwB1-Oo9ugy3xQO0BbuoBqosQ/viewform?pli=1" }],
-      [{ text: "🔗 Анкета 2", url: "https://docs.google.com/forms/d/e/1FAIpQLScS2v4mJcXW1U6cMymh1tJ6XbFhH0x4W341o3JkG0h6R800pA/viewform?pli=1" }],
+      [{ text: "🔗 Анкета 1", url: "https://docs.google.com/forms/d/e/1FAIpQLSfNmkjeiJjSx17Nt1_5hMKhIJ99Kh789Qhc4orsu22JZoadvg/viewform" }],
+      [{ text: "🔗 Анкета 2", url: "https://docs.google.com/forms/d/e/1FAIpQLSfNmkjeiJjSx17Nt1_5hMKhIJ99Kh789Qhc4orsu22JZoadvg/viewform" }],
       [{ text: "⬅️ Назад", callback_data: "back_main" }],
     ]
   },
@@ -25,8 +25,8 @@ const subMenu1 = {
 const subMenu2 = {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "🔗 Анкета 1", url: "https://docs.google.com/forms/d/e/1FAIpQLSeD_200PL2CF1L5ORSzbR4tDCwB1-Oo9ugy3xQO0BbuoBqosQ/viewform?pli=1" }],
-      [{ text: "🔗 Анкета 2", url: "https://docs.google.com/forms/d/e/1FAIpQLScS2v4mJcXW1U6cMymh1tJ6XbFhH0x4W341o3JkG0h6R800pA/viewform?pli=1" }],
+      [{ text: "🔗 Анкета 1", url: "https://docs.google.com/forms/d/e/1FAIpQLSfNmkjeiJjSx17Nt1_5hMKhIJ99Kh789Qhc4orsu22JZoadvg/viewform" }],
+      [{ text: "🔗 Анкета 2", url: "https://docs.google.com/forms/d/e/1FAIpQLSfNmkjeiJjSx17Nt1_5hMKhIJ99Kh789Qhc4orsu22JZoadvg/viewform" }],
       [{ text: "⬅️ Назад", callback_data: "back_main" }],
     ],
   },
