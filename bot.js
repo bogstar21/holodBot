@@ -1,12 +1,14 @@
 const TelegramBot = require("node-telegram-bot-api");
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
 
 const TOKEN = process.env.TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScypc5F06Gj_6Yze0qhLrWhM0I_tMnXSs1qSmdGNi6drbqnBA/viewform";
 const STATE_FILE = path.join(__dirname, "state.json");
+const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 
 // ─── STATE MANAGEMENT ────────────────────────────────────────────────────────
 
@@ -38,6 +40,24 @@ function clearUserState(userId) {
   const state = loadState();
   delete state[userId];
   saveState(state);
+}
+
+// ─── SESSIONS ────────────────────────────────────────────────────────────────
+
+function loadSessions() {
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      return JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf8"));
+    }
+  } catch (e) { }
+  return [];
+}
+
+function saveSession(sessionData) {
+  let sessions = loadSessions();
+  sessions.push(sessionData);
+  if (sessions.length > 200) sessions = sessions.slice(-200);
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
 }
 
 // ─── MENUS ───────────────────────────────────────────────────────────────────
@@ -217,24 +237,13 @@ function _sendFormLink(chatId, userId, location, photos) {
     }
   );
 
-  // Save session data
-  const sessionData = {
+  // Save session with timestamp for matching
+  saveSession({
     userId,
     timestamp: new Date().toISOString(),
     location: location || null,
     photos: photos || [],
-  };
-
-  const sessionsFile = path.join(__dirname, "sessions.json");
-  let sessions = [];
-  try {
-    if (fs.existsSync(sessionsFile)) {
-      sessions = JSON.parse(fs.readFileSync(sessionsFile, "utf8"));
-    }
-  } catch (e) { }
-  sessions.push(sessionData);
-  if (sessions.length > 200) sessions = sessions.slice(-200);
-  fs.writeFileSync(sessionsFile, JSON.stringify(sessions, null, 2));
+  });
 }
 
 // ─── FALLBACK ────────────────────────────────────────────────────────────────
@@ -261,7 +270,38 @@ bot.on("message", (msg) => {
   }
 });
 
-const http = require("http");
-http.createServer((req, res) => res.end("ok")).listen(process.env.PORT || 3000);
+// ─── HTTP SERVER (Railway keep-alive + sessions endpoint) ────────────────────
+
+http.createServer((req, res) => {
+  // GET /sessions/latest?minutes=30
+  // Returns the most recent session within the given time window
+  if (req.method === "GET" && req.url.startsWith("/sessions/latest")) {
+    const urlParams = new URL(req.url, "http://localhost");
+    const minutes = parseInt(urlParams.get("minutes") || "30");
+    const windowMs = minutes * 60 * 1000;
+    const now = Date.now();
+
+    const sessions = loadSessions();
+
+    // Find most recent session within the time window
+    const recent = sessions
+      .filter(s => now - new Date(s.timestamp).getTime() < windowMs)
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+
+    if (recent) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(recent));
+    } else {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No recent session found" }));
+    }
+    return;
+  }
+
+  // Default health check
+  res.writeHead(200);
+  res.end("ok");
+
+}).listen(process.env.PORT || 3000);
 
 console.log("🤖 Bot is running...");
