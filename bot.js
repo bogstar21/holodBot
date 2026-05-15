@@ -154,11 +154,27 @@ async function sendAndClean(chatId, userId, text, options = {}) {
 // Delete ALL tracked messages and reset user state
 // Delete ALL tracked messages in private chat and reset user state
 async function resetChat(chatId, userId, chatType) {
-  // PROTECTION: Only allow deletion if it is a private chat with the bot
-  if (chatType !== 'private') {
-    console.log("Deletion skipped: Topic/Channel history is protected.");
-    return;
+  if (chatType !== 'private') return;
+
+  const state = getUserState(userId);
+  const history = state.messageHistory || [];
+
+  // Delete all tracked messages (both bot and user)
+  for (const msgId of history) {
+    bot.deleteMessage(chatId, msgId).catch(() => {});
   }
+
+  // Brute force: try to delete last 100 messages by ID
+  // Telegram message IDs are sequential, so we try backwards from the latest
+  if (history.length > 0) {
+    const lastId = Math.max(...history);
+    for (let i = lastId; i > lastId - 100; i--) {
+      bot.deleteMessage(chatId, i).catch(() => {});
+    }
+  }
+
+  clearUserState(userId);
+}
 
   const state = getUserState(userId);
   const history = state.messageHistory || [];
