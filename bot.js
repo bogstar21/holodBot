@@ -8,13 +8,12 @@ const { google } = require("googleapis");
 const TOKEN = process.env.TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// Apps Script Web App URL — used as form link
 const FORM_BASE_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec";
 const STATE_FILE = path.join(__dirname, "state.json");
 const SHEET_ID = "137Dh42K-2VR_J6hPTkH65pWWP6Tl-QTYcTLVU-dhslg";
 const REFERENCES_SHEET = "users";
-const ADMIN_ID = "180881678";           // errors only
-const ADMIN_IDS = ["180881678", "1349356084"]; // registration notifications
+const ADMIN_ID = "180881678";
+const ADMIN_IDS = ["180881678", "1349356084"];
 const SYNC_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec?action=sync";
 const MAX_MESSAGES = 4;
 
@@ -30,25 +29,23 @@ function getSheetsClient() {
 }
 
 // ─── USER AUTHORIZATION ──────────────────────────────────────────────────────
-// References sheet columns: D=telegramId, E=username, F=role, G=name, H=workId
 
 async function getUserData(userId) {
   try {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      // Changed range to A through E
       range: `${REFERENCES_SHEET}!A2:E200`,
     });
     const rows = res.data.values || [];
     const row = rows.find(r => r[0] && r[0].toString() === userId.toString());
     if (!row) return null;
     return {
-      telegramId: row[0] || "", // Column A
-      username: row[1] || "",   // Column B
-      role: (row[2] || "").toLowerCase().trim(), // Column C
-      name: row[3] || "",       // Column D
-      workId: row[4] || "",     // Column E
+      telegramId: row[0] || "",
+      username:   row[1] || "",
+      role:       (row[2] || "").toLowerCase().trim(),
+      name:       row[3] || "",
+      workId:     row[4] || "",
     };
   } catch (err) {
     console.error("getUserData error:", err.message);
@@ -66,13 +63,11 @@ async function registerUser(userId, username) {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      // Changed range to A through E
       range: `${REFERENCES_SHEET}!A2:E200`,
     });
     const rows = res.data.values || [];
     if (rows.find(r => r[0] && r[0].toString() === userId.toString())) return "exists";
 
-    // Write all 5 cols starting from A
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
       range: `${REFERENCES_SHEET}!A:E`,
@@ -110,12 +105,19 @@ function getSessionByToken(token) {
 // ─── STATE MANAGEMENT ────────────────────────────────────────────────────────
 
 function loadState() {
-  try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch (e) { }
+  try {
+    if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  } catch (e) {}
   return {};
 }
 
-function saveState(state) { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); }
-function getUserState(userId) { return loadState()[userId] || { step: "idle" }; }
+function saveState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function getUserState(userId) {
+  return loadState()[userId] || { step: "idle" };
+}
 
 function setUserState(userId, data) {
   const state = loadState();
@@ -135,13 +137,10 @@ async function trackAndClean(chatId, userId, newMessageId) {
   const state = getUserState(userId);
   const history = state.messageHistory || [];
   history.push(newMessageId);
-
-  // Auto-delete oldest message every time we exceed MAX_MESSAGES (every 4th)
   while (history.length > MAX_MESSAGES) {
     const oldId = history.shift();
-    bot.deleteMessage(chatId, oldId).catch(() => { });
+    bot.deleteMessage(chatId, oldId).catch(() => {});
   }
-
   setUserState(userId, { messageHistory: history });
 }
 
@@ -151,9 +150,8 @@ async function sendAndClean(chatId, userId, text, options = {}) {
   return sent;
 }
 
-// Delete ALL tracked messages in private chat and reset user state
 async function resetChat(chatId, userId, chatType) {
-  if (chatType !== 'private') return;
+  if (chatType !== "private") return;
   const state = getUserState(userId);
   const history = state.messageHistory || [];
   for (const msgId of history) {
@@ -167,33 +165,18 @@ async function resetChat(chatId, userId, chatType) {
   }
   clearUserState(userId);
 }
-// ─── KEYBOARDS ───────────────────────────────────────────────────────────────
-
-  const state = getUserState(userId);
-  const history = state.messageHistory || [];
-  
-  // Attempt to delete every message the bot has tracked
-  for (const msgId of history) {
-    bot.deleteMessage(chatId, msgId).catch((err) => {
-      // Messages older than 48h or already deleted will fail silently
-      console.log(`Could not delete msg ${msgId}: ${err.message}`);
-    });
-  }
-  
-  // Completely wipe the history from the state file
-  clearUserState(userId);
-}
 
 // ─── KEYBOARDS ───────────────────────────────────────────────────────────────
 
 function getMainKeyboard(role) {
   const kb = {
-    admin: [[{ text: "📦 Агент" }, { text: "📋 Продавець" }], [{ text: "🔄 Оновити довідники" }, { text: "🗑 Очистити чат" }]],
-    agent: [[{ text: "📦 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    seller: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
+    admin:      [[{ text: "📦 Агент" }, { text: "📋 Продавець" }], [{ text: "🔄 Оновити довідники" }, { text: "🗑 Очистити чат" }]],
+    agent:      [[{ text: "📦 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
+    seller:     [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
     supervisor: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    logist: [[{ text: "🚛 Логістика: Анкета" }], [{ text: "🗑 Очистити чат" }]],
-    auditor: [[{ text: "🔍 Аудит: Анкета" }], [{ text: "🗑 Очистити чат" }]],
+    superviser: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
+    logist:     [[{ text: "🚛 Логістика: Анкета" }], [{ text: "🗑 Очистити чат" }]],
+    auditor:    [[{ text: "🔍 Аудит: Анкета" }], [{ text: "🗑 Очистити чат" }]],
   };
   const rows = kb[role];
   if (!rows) return null;
@@ -235,7 +218,7 @@ bot.onText(/\/register/, async (msg) => {
   if (result === "registered") {
     sendAndClean(msg.chat.id, userId, "✅ Запит надіслано! Адміністратор розгляне його найближчим часом.");
     ADMIN_IDS.forEach(id => bot.sendMessage(id,
-      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: ${userId}\n\nВідкрийте Users sheet → встановіть роль та workId (H col)`,
+      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: ${userId}\n\nВідкрийте Users sheet → встановіть роль та workId`,
       { parse_mode: "Markdown" }
     ));
     return;
@@ -253,7 +236,6 @@ bot.on("message", async (msg) => {
   const state = getUserState(userId);
   await trackAndClean(msg.chat.id, userId, msg.message_id);
 
-  // Flow steps
   if (state.step === "waiting_location") {
     return sendAndClean(msg.chat.id, userId, "📍 Будь ласка, надішліть геолокацію кнопкою нижче.");
   }
@@ -266,13 +248,11 @@ bot.on("message", async (msg) => {
     return sendAndClean(msg.chat.id, userId, "📸 Надішліть фото або натисніть *Готово*.", { parse_mode: "Markdown" });
   }
 
-  // Get role for menu actions
   const role = await getUserRole(userId);
   if (!role || role === "pending") {
     return sendAndClean(msg.chat.id, userId, "🔒 У вас немає доступу. Надішліть /register.");
   }
 
-  // Start flow buttons
   const flowTriggers = ["Агент", "Продавець", "анкету", "Логістика", "Аудит"];
   if (flowTriggers.some(k => text.includes(k))) {
     setUserState(userId, { step: "waiting_location", photos: [], role });
@@ -284,7 +264,6 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // Sync button (admin only)
   if (text === "🔄 Оновити довідники") {
     if (role !== "admin") return sendAndClean(msg.chat.id, userId, "🔒 Тільки для адміністраторів.");
     await sendAndClean(msg.chat.id, userId, "🔄 Оновлення довідників...");
@@ -298,20 +277,15 @@ bot.on("message", async (msg) => {
     return;
   }
 
-// Reset chat button logic
   if (text === "🗑 Очистити чат") {
-    // Pass msg.chat.type to verify it's a private chat
-    await resetChat(msg.chat.id, userId, msg.chat.type); 
-    
+    await resetChat(msg.chat.id, userId, msg.chat.type);
     const sent = await bot.sendMessage(msg.chat.id, "🗑 Чат очищено. Виберіть дію:", {
       reply_markup: getMainKeyboard(role),
     });
-    
-    // Start a fresh history with just this new message
     setUserState(userId, { messageHistory: [sent.message_id] });
     return;
   }
-  // Default: show menu
+
   sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: getMainKeyboard(role) });
 });
 
@@ -360,8 +334,6 @@ bot.on("photo", async (msg) => {
 
 async function _sendFormLink(chatId, userId, location, photos, role) {
   const token = `${Date.now()}_${userId}`;
-
-  // Pass token (for session matching), tid (for user identity in form), user (display name)
   const userData = await getUserData(userId);
   const username = userData ? userData.username : "";
   const formLink = `${FORM_BASE_URL}?token=${token}&tid=${userId}&user=${encodeURIComponent(username)}`;
@@ -377,7 +349,6 @@ async function _sendFormLink(chatId, userId, location, photos, role) {
     }
   );
 
-  // Restore main keyboard
   await sendAndClean(chatId, userId, "Після заповнення можна розпочати новий акт:", {
     reply_markup: getMainKeyboard(role),
   });
