@@ -17,6 +17,9 @@ const ADMIN_IDS = ["180881678", "1349356084"];
 const SYNC_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec?action=sync";
 const MAX_MESSAGES = 4;
 
+const CHANNELS = ["Визиты", "Аудит Ласунка", "Аудит Рудь_Найси", "XO", "Инфо продажи", "General"];
+const ROLES = ["agent", "seller", "supervisor", "auditor", "logist"];
+
 // ─── GOOGLE SHEETS AUTH ──────────────────────────────────────────────────────
 
 function getSheetsClient() {
@@ -35,7 +38,7 @@ async function getUserData(userId) {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!A2:E200`,
+      range: `${REFERENCES_SHEET}!A2:F200`,
     });
     const rows = res.data.values || [];
     const row = rows.find(r => r[0] && r[0].toString() === userId.toString());
@@ -46,6 +49,7 @@ async function getUserData(userId) {
       role:       (row[2] || "").toLowerCase().trim(),
       name:       row[3] || "",
       workId:     row[4] || "",
+      channel:    row[5] || "",
     };
   } catch (err) {
     console.error("getUserData error:", err.message);
@@ -63,21 +67,56 @@ async function registerUser(userId, username) {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!A2:E200`,
+      range: `${REFERENCES_SHEET}!A2:F200`,
     });
     const rows = res.data.values || [];
     if (rows.find(r => r[0] && r[0].toString() === userId.toString())) return "exists";
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!A:E`,
+      range: `${REFERENCES_SHEET}!A:F`,
       valueInputOption: "RAW",
-      resource: { values: [[userId.toString(), username || "", "pending", "", ""]] },
+      resource: { values: [[userId.toString(), username || "", "pending", "", "", ""]] },
     });
     return "registered";
   } catch (err) {
     console.error("registerUser error:", err.message);
     return "error";
+  }
+}
+
+// Write full user data after admin approval
+async function approveUser(telegramId, username, role, name, workId, channel) {
+  try {
+    const sheets = getSheetsClient();
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `${REFERENCES_SHEET}!A2:F200`,
+    });
+    const rows = res.data.values || [];
+    const rowIndex = rows.findIndex(r => r[0] && r[0].toString() === telegramId.toString());
+    if (rowIndex === -1) {
+      // User not found — append new row
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID,
+        range: `${REFERENCES_SHEET}!A:F`,
+        valueInputOption: "RAW",
+        resource: { values: [[telegramId, username, role, name, workId, channel]] },
+      });
+    } else {
+      // Update existing row (rowIndex + 2 because data starts at row 2)
+      const sheetRow = rowIndex + 2;
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${REFERENCES_SHEET}!A${sheetRow}:F${sheetRow}`,
+        valueInputOption: "RAW",
+        resource: { values: [[telegramId, username, role, name, workId, channel]] },
+      });
+    }
+    return true;
+  } catch (err) {
+    console.error("approveUser error:", err.message);
+    return false;
   }
 }
 
@@ -101,6 +140,12 @@ function getLatestSession(minutes) {
 function getSessionByToken(token) {
   return sessions.find(s => s.token === token) || null;
 }
+
+// ─── PENDING REGISTRATIONS (in-memory) ───────────────────────────────────────
+// Stores registration data while admin fills in details
+// { [adminUserId]: { step, telegramId, username, name, workId, channel, role } }
+
+const pendingApprovals = {};
 
 // ─── STATE MANAGEMENT ────────────────────────────────────────────────────────
 
@@ -194,6 +239,25 @@ const donePhotoKeyboard = {
   resize_keyboard: true,
 };
 
+// ─── ADMIN REGISTRATION HELPERS ──────────────────────────────────────────────
+
+function channelKeyboard() {
+  const rows = [];
+  for (let i = 0; i < CHANNELS.length; i += 3) {
+    rows.push(CHANNELS.slice(i, i + 3).map(c => ({ text: c, callback_data: `reg_channel_${c}` })));
+  }
+  return { inline_keyboard: rows };
+}
+
+function roleKeyboard() {
+  const rows = [];
+  for (let i = 0; i < ROLES.length; i += 3) {
+    rows.push(ROLES.slice(i, i + 3).map(r => ({ text: r, callback_data: `reg_role_${r}` })));
+  }
+  rows.push([{ text: "❌ Відхилити", callback_data: "reg_role_reject" }]);
+  return { inline_keyboard: rows };
+}
+
 // ─── /start ──────────────────────────────────────────────────────────────────
 
 bot.onText(/\/start/, async (msg) => {
@@ -214,16 +278,136 @@ bot.onText(/\/register/, async (msg) => {
   await trackAndClean(msg.chat.id, userId, msg.message_id);
 
   const result = await registerUser(userId, username);
-  if (result === "exists") return sendAndClean(msg.chat.id, userId, "⏳ Ваш запит вже надіслано. Очікуйте підтвердження.");
+
+  if (result === "exists") {
+    return sendAndClean(msg.chat.id, userId, "⏳ Ваш запит вже надіслано. Очікуйте підтвердження.");
+  }
+
   if (result === "registered") {
     sendAndClean(msg.chat.id, userId, "✅ Запит надіслано! Адміністратор розгляне його найближчим часом.");
-    ADMIN_IDS.forEach(id => bot.sendMessage(id,
-      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: ${userId}\n\nВідкрийте Users sheet → встановіть роль та workId`,
-      { parse_mode: "Markdown" }
-    ));
+
+    // Notify both admins with interactive registration buttons
+    ADMIN_IDS.forEach(adminId => {
+      bot.sendMessage(
+        adminId,
+        `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: \`${userId}\`\n\nНатисніть кнопку нижче щоб розпочати реєстрацію:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "✅ Зареєструвати", callback_data: `reg_start_${userId}_${username}` },
+              { text: "❌ Відхилити", callback_data: `reg_reject_${userId}` },
+            ]],
+          },
+        }
+      );
+    });
     return;
   }
+
   sendAndClean(msg.chat.id, userId, "❌ Помилка реєстрації. Спробуйте пізніше.");
+});
+
+// ─── CALLBACK QUERIES ────────────────────────────────────────────────────────
+
+bot.on("callback_query", async (query) => {
+  const adminId = query.from.id;
+  const data = query.data;
+  bot.answerCallbackQuery(query.id);
+
+  // ── Start registration ───────────────────────────────────────────────────
+  if (data.startsWith("reg_start_")) {
+    const parts = data.replace("reg_start_", "").split("_");
+    const newUserId = parts[0];
+    const newUsername = parts.slice(1).join("_");
+
+    pendingApprovals[adminId] = {
+      step: "waiting_name",
+      telegramId: newUserId,
+      username: newUsername,
+    };
+
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+
+    bot.sendMessage(adminId,
+      `📝 *Реєстрація ${newUsername}*\n\nКрок 1/4 — Введіть повне ім'я:`,
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  // ── Reject from notification button ──────────────────────────────────────
+  if (data.startsWith("reg_reject_")) {
+    const newUserId = data.replace("reg_reject_", "");
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+    bot.sendMessage(adminId, "❌ Запит відхилено.");
+    bot.sendMessage(newUserId, "❌ Ваш запит на доступ було відхилено.");
+    delete pendingApprovals[adminId];
+    return;
+  }
+
+  // ── Channel selected ──────────────────────────────────────────────────────
+  if (data.startsWith("reg_channel_")) {
+    const channel = data.replace("reg_channel_", "");
+    if (!pendingApprovals[adminId]) return;
+
+    pendingApprovals[adminId].channel = channel;
+    pendingApprovals[adminId].step = "waiting_role";
+
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+
+    bot.sendMessage(adminId,
+      `✅ Канал: *${channel}*\n\nКрок 4/4 — Виберіть роль:`,
+      { parse_mode: "Markdown", reply_markup: roleKeyboard() }
+    );
+    return;
+  }
+
+  // ── Role selected ─────────────────────────────────────────────────────────
+  if (data.startsWith("reg_role_")) {
+    const role = data.replace("reg_role_", "");
+    if (!pendingApprovals[adminId]) return;
+
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+
+    if (role === "reject") {
+      bot.sendMessage(adminId, "❌ Реєстрацію відхилено.");
+      bot.sendMessage(pendingApprovals[adminId].telegramId, "❌ Ваш запит на доступ було відхилено.");
+      delete pendingApprovals[adminId];
+      return;
+    }
+
+    const reg = pendingApprovals[adminId];
+    const success = await approveUser(reg.telegramId, reg.username, role, reg.name, reg.workId, reg.channel);
+
+    if (success) {
+      bot.sendMessage(adminId,
+        `✅ *Користувача зареєстровано!*\n\n👤 ${reg.username}\n🎭 Роль: ${role}\n📋 Ім'я: ${reg.name}\n🔢 Work ID: ${reg.workId}\n📣 Канал: ${reg.channel}`,
+        { parse_mode: "Markdown" }
+      );
+      bot.sendMessage(reg.telegramId,
+        `✅ *Доступ надано!*\n\nВітаємо, ${reg.name}!\nВаша роль: *${role}*\n\nНатисніть /start щоб розпочати.`,
+        { parse_mode: "Markdown" }
+      );
+    } else {
+      bot.sendMessage(adminId, "❌ Помилка запису в таблицю. Спробуйте ще раз.");
+    }
+
+    delete pendingApprovals[adminId];
+    return;
+  }
 });
 
 // ─── MESSAGE HANDLER ─────────────────────────────────────────────────────────
@@ -233,6 +417,34 @@ bot.on("message", async (msg) => {
   const text = msg.text || "";
   if (msg.location || msg.photo || text.startsWith("/")) return;
 
+  // ── Admin registration flow ───────────────────────────────────────────────
+  if (pendingApprovals[userId]) {
+    const reg = pendingApprovals[userId];
+
+    if (reg.step === "waiting_name") {
+      pendingApprovals[userId].name = text.trim();
+      pendingApprovals[userId].step = "waiting_workid";
+      bot.sendMessage(userId,
+        `✅ Ім'я: *${text.trim()}*\n\nКрок 2/4 — Введіть Work ID:`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+
+    if (reg.step === "waiting_workid") {
+      pendingApprovals[userId].workId = text.trim();
+      pendingApprovals[userId].step = "waiting_channel";
+      bot.sendMessage(userId,
+        `✅ Work ID: *${text.trim()}*\n\nКрок 3/4 — Виберіть канал:`,
+        { parse_mode: "Markdown", reply_markup: channelKeyboard() }
+      );
+      return;
+    }
+
+    return; // Waiting for button press, ignore text
+  }
+
+  // ── Regular user flow ─────────────────────────────────────────────────────
   const state = getUserState(userId);
   await trackAndClean(msg.chat.id, userId, msg.message_id);
 
