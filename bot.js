@@ -117,7 +117,7 @@ async function registerUser(userId, username) {
       spreadsheetId: SHEET_ID,
       range: `${USERS_SHEET}!A:E`,
       valueInputOption: "RAW",
-      resource: { values: [[userId.toString(), username || "", "pending", "", ""]] },
+      resource: { values: [[userId.toString(), username || "", "pending", "", "", ""]] },
     });
     return "registered";
   } catch (err) {
@@ -227,7 +227,110 @@ bot.onText(/\/register/, async (msg) => {
     ));
     return;
   }
+
   sendAndClean(msg.chat.id, userId, "❌ Помилка реєстрації. Спробуйте пізніше.");
+});
+
+// ─── CALLBACK QUERIES ────────────────────────────────────────────────────────
+
+bot.on("callback_query", async (query) => {
+  const adminId = query.from.id;
+  const data = query.data;
+  bot.answerCallbackQuery(query.id);
+
+  // ── Start registration ───────────────────────────────────────────────────
+  if (data.startsWith("reg_start_")) {
+    const parts = data.replace("reg_start_", "").split("_");
+    const newUserId = parts[0];
+    const newUsername = parts.slice(1).join("_");
+
+    pendingApprovals[adminId] = {
+      step: "waiting_name",
+      telegramId: newUserId,
+      username: newUsername,
+    };
+
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+
+    bot.sendMessage(adminId,
+      `📝 *Реєстрація ${newUsername}*\n\nКрок 1/4 — Введіть повне ім'я:`,
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  // ── Reject from notification button ──────────────────────────────────────
+  if (data.startsWith("reg_reject_")) {
+    const newUserId = data.replace("reg_reject_", "");
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+    bot.sendMessage(adminId, "❌ Запит відхилено.");
+    bot.sendMessage(newUserId, "❌ Ваш запит на доступ було відхилено.");
+    delete pendingApprovals[adminId];
+    return;
+  }
+
+  // ── Channel selected ──────────────────────────────────────────────────────
+  if (data.startsWith("reg_channel_")) {
+    const channel = data.replace("reg_channel_", "");
+    if (!pendingApprovals[adminId]) return;
+
+    pendingApprovals[adminId].channel = channel;
+    pendingApprovals[adminId].step = "waiting_role";
+
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+
+    bot.sendMessage(adminId,
+      `✅ Канал: *${channel}*\n\nКрок 4/4 — Виберіть роль:`,
+      { parse_mode: "Markdown", reply_markup: roleKeyboard() }
+    );
+    return;
+  }
+
+  // ── Role selected ─────────────────────────────────────────────────────────
+  if (data.startsWith("reg_role_")) {
+    const role = data.replace("reg_role_", "");
+    if (!pendingApprovals[adminId]) return;
+
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id,
+    }).catch(() => {});
+
+    if (role === "reject") {
+      bot.sendMessage(adminId, "❌ Реєстрацію відхилено.");
+      bot.sendMessage(pendingApprovals[adminId].telegramId, "❌ Ваш запит на доступ було відхилено.");
+      delete pendingApprovals[adminId];
+      return;
+    }
+
+    const reg = pendingApprovals[adminId];
+    const success = await approveUser(reg.telegramId, reg.username, role, reg.name, reg.workId, reg.channel);
+
+    if (success) {
+      bot.sendMessage(adminId,
+        `✅ *Користувача зареєстровано!*\n\n👤 ${reg.username}\n🎭 Роль: ${role}\n📋 Ім'я: ${reg.name}\n🔢 Work ID: ${reg.workId}\n📣 Канал: ${reg.channel}`,
+        { parse_mode: "Markdown" }
+      );
+      bot.sendMessage(reg.telegramId,
+        `✅ *Доступ надано!*\n\nВітаємо, ${reg.name}!\nВаша роль: *${role}*\n\nНатисніть /start щоб розпочати.`,
+        { parse_mode: "Markdown" }
+      );
+    } else {
+      bot.sendMessage(adminId, "❌ Помилка запису в таблицю. Спробуйте ще раз.");
+    }
+
+    delete pendingApprovals[adminId];
+    return;
+  }
 });
 
 // ─── MESSAGE HANDLER ─────────────────────────────────────────────────────────
@@ -236,6 +339,34 @@ bot.on("message", async (msg) => {
   const text   = msg.text || "";
   if (msg.location || msg.photo || text.startsWith("/")) return;
 
+  // ── Admin registration flow ───────────────────────────────────────────────
+  if (pendingApprovals[userId]) {
+    const reg = pendingApprovals[userId];
+
+    if (reg.step === "waiting_name") {
+      pendingApprovals[userId].name = text.trim();
+      pendingApprovals[userId].step = "waiting_workid";
+      bot.sendMessage(userId,
+        `✅ Ім'я: *${text.trim()}*\n\nКрок 2/4 — Введіть Work ID:`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+
+    if (reg.step === "waiting_workid") {
+      pendingApprovals[userId].workId = text.trim();
+      pendingApprovals[userId].step = "waiting_channel";
+      bot.sendMessage(userId,
+        `✅ Work ID: *${text.trim()}*\n\nКрок 3/4 — Виберіть канал:`,
+        { parse_mode: "Markdown", reply_markup: channelKeyboard() }
+      );
+      return;
+    }
+
+    return; // Waiting for button press, ignore text
+  }
+
+  // ── Regular user flow ─────────────────────────────────────────────────────
   const state = getUserState(userId);
   await trackAndClean(msg.chat.id, userId, msg.message_id);
 
@@ -282,7 +413,7 @@ bot.on("message", async (msg) => {
 
   // Clear chat
   if (text === "🗑 Очистити чат") {
-    await resetChat(msg.chat.id, userId);
+    await resetChat(msg.chat.id, userId, msg.chat.type);
     const sent = await bot.sendMessage(msg.chat.id, "🗑 Чат очищено. Виберіть дію:", {
       reply_markup: getMainKeyboard(role),
     });
