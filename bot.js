@@ -37,17 +37,18 @@ async function getUserData(userId) {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!D2:H200`,
+      // Changed range to A through E
+      range: `${REFERENCES_SHEET}!A2:E200`,
     });
     const rows = res.data.values || [];
     const row = rows.find(r => r[0] && r[0].toString() === userId.toString());
     if (!row) return null;
     return {
-      telegramId: row[0] || "",
-      username: row[1] || "",
-      role: (row[2] || "").toLowerCase().trim(),
-      name: row[3] || "",
-      workId: row[4] || "",
+      telegramId: row[0] || "", // Column A
+      username: row[1] || "",   // Column B
+      role: (row[2] || "").toLowerCase().trim(), // Column C
+      name: row[3] || "",       // Column D
+      workId: row[4] || "",     // Column E
     };
   } catch (err) {
     console.error("getUserData error:", err.message);
@@ -65,15 +66,16 @@ async function registerUser(userId, username) {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!D2:H200`,
+      // Changed range to A through E
+      range: `${REFERENCES_SHEET}!A2:E200`,
     });
     const rows = res.data.values || [];
     if (rows.find(r => r[0] && r[0].toString() === userId.toString())) return "exists";
 
-    // Write all 5 cols: telegramId, username, role=pending, name="", workId=""
+    // Write all 5 cols starting from A
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!D:H`,
+      range: `${REFERENCES_SHEET}!A:E`,
       valueInputOption: "RAW",
       resource: { values: [[userId.toString(), username || "", "pending", "", ""]] },
     });
