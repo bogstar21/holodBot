@@ -1,25 +1,74 @@
 const TelegramBot = require("node-telegram-bot-api");
-const fs = require("fs");
-const path = require("path");
-const http = require("http");
-const https = require("https");
-const { google } = require("googleapis");
+const fs          = require("fs");
+const path        = require("path");
+const http        = require("http");
+const https       = require("https");
+const { google }  = require("googleapis");
 
-const TOKEN = process.env.TOKEN;
-const bot = new TelegramBot(TOKEN, { polling: true });
+const TOKEN    = process.env.TOKEN;
+const bot      = new TelegramBot(TOKEN, { polling: true });
 
-// Apps Script Web App URL — used as form link
 const FORM_BASE_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec";
-const STATE_FILE = path.join(__dirname, "state.json");
-const SHEET_ID = "137Dh42K-2VR_J6hPTkH65pWWP6Tl-QTYcTLVU-dhslg";
-const REFERENCES_SHEET = "users";
-const ADMIN_ID = "180881678";           // errors only
-const ADMIN_IDS = ["180881678", "1349356084"]; // registration notifications
-const SYNC_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec?action=sync";
-const MAX_MESSAGES = 4;
+const GAS_URL       = FORM_BASE_URL; // same URL handles ?action=updateStatus
+const SHEET_ID      = "137Dh42K-2VR_J6hPTkH65pWWP6Tl-QTYcTLVU-dhslg";
+const USERS_SHEET   = "users";
+const ADMIN_ID      = "180881678";
+const ADMIN_IDS     = ["180881678", "1349356084"];
+const STATE_FILE    = path.join(__dirname, "state.json");
+const MAX_MESSAGES  = 4;
+
+// ─── BUTTON → MODE MAP ───────────────────────────────────────────────────────
+const BUTTON_MODES = {
+  "📋 Візит":           "vst",
+  "📦 Запит XO":       "xo_req",
+  "⚠️ Виставити штраф":"fine_issue",
+  "🔧 Виправити штраф":"fine_fix",
+  "🚛 Дія логіста":    "logist_action",
+};
+
+// ─── KEYBOARDS ───────────────────────────────────────────────────────────────
+function getMainKeyboard(role) {
+  const rows = {
+    admin: [
+      [{ text: "📋 Візит" }, { text: "📦 Запит XO" }],
+      [{ text: "⚠️ Виставити штраф" }, { text: "🔧 Виправити штраф" }],
+      [{ text: "🚛 Дія логіста" }, { text: "🔄 Оновити довідники" }],
+      [{ text: "🗑 Очистити чат" }],
+    ],
+    agent: [
+      [{ text: "📋 Візит" }, { text: "📦 Запит XO" }],
+      [{ text: "🔧 Виправити штраф" }],
+      [{ text: "🗑 Очистити чат" }],
+    ],
+    superviser: [
+      [{ text: "📋 Візит" }],
+      [{ text: "🗑 Очистити чат" }],
+    ],
+    logist: [
+      [{ text: "🚛 Дія логіста" }],
+      [{ text: "🗑 Очистити чат" }],
+    ],
+    auditor: [
+      [{ text: "📋 Візит" }, { text: "⚠️ Виставити штраф" }],
+      [{ text: "🗑 Очистити чат" }],
+    ],
+  };
+  const keyboard = rows[role];
+  if (!keyboard) return null;
+  return { keyboard, resize_keyboard: true, persistent: true };
+}
+
+const locationKeyboard = {
+  keyboard: [[{ text: "📍 Надіслати геолокацію", request_location: true }]],
+  resize_keyboard: true, one_time_keyboard: true,
+};
+
+const donePhotoKeyboard = {
+  keyboard: [[{ text: "✅ Готово, далі" }]],
+  resize_keyboard: true,
+};
 
 // ─── GOOGLE SHEETS AUTH ──────────────────────────────────────────────────────
-
 function getSheetsClient() {
   const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
   const auth = new google.auth.GoogleAuth({
@@ -29,26 +78,21 @@ function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
-// ─── USER AUTHORIZATION ──────────────────────────────────────────────────────
-// References sheet columns: D=telegramId, E=username, F=role, G=name, H=workId
-
 async function getUserData(userId) {
   try {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      // Changed range to A through E
-      range: `${REFERENCES_SHEET}!A2:E200`,
+      range: `${USERS_SHEET}!A2:E200`,
     });
-    const rows = res.data.values || [];
-    const row = rows.find(r => r[0] && r[0].toString() === userId.toString());
+    const row = (res.data.values || []).find(r => r[0]?.toString() === userId.toString());
     if (!row) return null;
     return {
-      telegramId: row[0] || "", // Column A
-      username: row[1] || "",   // Column B
-      role: (row[2] || "").toLowerCase().trim(), // Column C
-      name: row[3] || "",       // Column D
-      workId: row[4] || "",     // Column E
+      telegramId: row[0] || "",
+      username:   row[1] || "",
+      role:       (row[2] || "").toLowerCase().trim(),
+      name:       row[3] || "",
+      workId:     row[4] || "",
     };
   } catch (err) {
     console.error("getUserData error:", err.message);
@@ -66,16 +110,12 @@ async function registerUser(userId, username) {
     const sheets = getSheetsClient();
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      // Changed range to A through E
-      range: `${REFERENCES_SHEET}!A2:E200`,
+      range: `${USERS_SHEET}!A2:E200`,
     });
-    const rows = res.data.values || [];
-    if (rows.find(r => r[0] && r[0].toString() === userId.toString())) return "exists";
-
-    // Write all 5 cols starting from A
+    if ((res.data.values || []).find(r => r[0]?.toString() === userId.toString())) return "exists";
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `${REFERENCES_SHEET}!A:E`,
+      range: `${USERS_SHEET}!A:E`,
       valueInputOption: "RAW",
       resource: { values: [[userId.toString(), username || "", "pending", "", ""]] },
     });
@@ -86,110 +126,78 @@ async function registerUser(userId, username) {
   }
 }
 
-// ─── SESSIONS (in-memory) ────────────────────────────────────────────────────
-
+// ─── SESSIONS ────────────────────────────────────────────────────────────────
 const sessions = [];
 
-function saveSession(sessionData) {
-  sessions.push(sessionData);
+function saveSession(data) {
+  sessions.push(data);
   if (sessions.length > 500) sessions.splice(0, 1);
-}
-
-function getLatestSession(minutes) {
-  const windowMs = minutes * 60 * 1000;
-  const now = Date.now();
-  return sessions
-    .filter(s => now - new Date(s.timestamp).getTime() < windowMs)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] || null;
 }
 
 function getSessionByToken(token) {
   return sessions.find(s => s.token === token) || null;
 }
 
-// ─── STATE MANAGEMENT ────────────────────────────────────────────────────────
+function getLatestSession(minutes) {
+  const cutoff = Date.now() - minutes * 60 * 1000;
+  return sessions
+    .filter(s => new Date(s.timestamp).getTime() > cutoff)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] || null;
+}
 
+// ─── STATE ───────────────────────────────────────────────────────────────────
 function loadState() {
-  try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch (e) { }
+  try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
   return {};
 }
-
-function saveState(state) { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); }
-function getUserState(userId) { return loadState()[userId] || { step: "idle" }; }
-
-function setUserState(userId, data) {
-  const state = loadState();
-  state[userId] = { ...state[userId], ...data };
-  saveState(state);
+function saveState(s) { fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)); }
+function getUserState(uid) { return loadState()[uid] || { step: "idle" }; }
+function setUserState(uid, data) {
+  const s = loadState();
+  s[uid] = { ...s[uid], ...data };
+  saveState(s);
+}
+function clearUserState(uid) {
+  const s = loadState();
+  delete s[uid];
+  saveState(s);
 }
 
-function clearUserState(userId) {
-  const state = loadState();
-  delete state[userId];
-  saveState(state);
-}
-
-// ─── CLEAN CHAT ───────────────────────────────────────────────────────────────
-
-async function trackAndClean(chatId, userId, newMessageId) {
-  const state = getUserState(userId);
+// ─── CHAT CLEANUP ─────────────────────────────────────────────────────────────
+async function trackAndClean(chatId, userId, msgId) {
+  const state   = getUserState(userId);
   const history = state.messageHistory || [];
-  history.push(newMessageId);
-
-  // Auto-delete oldest message every time we exceed MAX_MESSAGES (every 4th)
+  history.push(msgId);
   while (history.length > MAX_MESSAGES) {
-    const oldId = history.shift();
-    bot.deleteMessage(chatId, oldId).catch(() => { });
+    bot.deleteMessage(chatId, history.shift()).catch(() => {});
   }
-
   setUserState(userId, { messageHistory: history });
 }
 
-async function sendAndClean(chatId, userId, text, options = {}) {
-  const sent = await bot.sendMessage(chatId, text, options);
+async function sendAndClean(chatId, userId, text, opts = {}) {
+  const sent = await bot.sendMessage(chatId, text, opts);
   await trackAndClean(chatId, userId, sent.message_id);
   return sent;
 }
 
-// Delete ALL tracked messages and reset user state
 async function resetChat(chatId, userId) {
-  const state = getUserState(userId);
-  const history = state.messageHistory || [];
-  for (const msgId of history) {
-    bot.deleteMessage(chatId, msgId).catch(() => { });
-  }
+  const history = getUserState(userId).messageHistory || [];
+  for (const id of history) bot.deleteMessage(chatId, id).catch(() => {});
   clearUserState(userId);
 }
 
-// ─── KEYBOARDS ───────────────────────────────────────────────────────────────
-
-function getMainKeyboard(role) {
-  const kb = {
-    admin: [[{ text: "📦 Агент" }, { text: "📋 Продавець" }], [{ text: "🔄 Оновити довідники" }, { text: "🗑 Очистити чат" }]],
-    agent: [[{ text: "📦 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    seller: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    superviser: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    logistic: [[{ text: "🚛 Логістика: Анкета" }], [{ text: "🗑 Очистити чат" }]],
-    auditor: [[{ text: "🔍 Аудит: Анкета" }], [{ text: "🗑 Очистити чат" }]],
-  };
-  const rows = kb[role];
-  if (!rows) return null;
-  return { keyboard: rows, resize_keyboard: true, persistent: true };
+// ─── HTTPS HELPER ─────────────────────────────────────────────────────────────
+function httpsGet(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, res => {
+      let body = "";
+      res.on("data", c => body += c);
+      res.on("end", () => resolve(body));
+    }).on("error", reject);
+  });
 }
 
-const locationKeyboard = {
-  keyboard: [[{ text: "📍 Надіслати геолокацію", request_location: true }]],
-  resize_keyboard: true,
-  one_time_keyboard: true,
-};
-
-const donePhotoKeyboard = {
-  keyboard: [[{ text: "✅ Готово, далі" }]],
-  resize_keyboard: true,
-};
-
 // ─── /start ──────────────────────────────────────────────────────────────────
-
 bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
   clearUserState(userId);
@@ -197,22 +205,24 @@ bot.onText(/\/start/, async (msg) => {
   if (!role || role === "pending") {
     return sendAndClean(msg.chat.id, userId, "🔒 У вас немає доступу.\n\nНадішліть /register щоб запросити доступ.");
   }
-  sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: getMainKeyboard(role) });
+  const kb = getMainKeyboard(role);
+  sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: kb });
 });
 
 // ─── /register ───────────────────────────────────────────────────────────────
-
 bot.onText(/\/register/, async (msg) => {
-  const userId = msg.from.id;
+  const userId   = msg.from.id;
   const username = msg.from.username ? "@" + msg.from.username : msg.from.first_name;
   await trackAndClean(msg.chat.id, userId, msg.message_id);
 
   const result = await registerUser(userId, username);
-  if (result === "exists") return sendAndClean(msg.chat.id, userId, "⏳ Ваш запит вже надіслано. Очікуйте підтвердження.");
+  if (result === "exists") {
+    return sendAndClean(msg.chat.id, userId, "⏳ Ваш запит вже надіслано. Очікуйте підтвердження.");
+  }
   if (result === "registered") {
     sendAndClean(msg.chat.id, userId, "✅ Запит надіслано! Адміністратор розгляне його найближчим часом.");
     ADMIN_IDS.forEach(id => bot.sendMessage(id,
-      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: ${userId}\n\nВідкрийте References sheet → встановіть роль та workId (H col)`,
+      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: \`${userId}\`\n\nВстановіть роль у Users sheet (col C) та workId (col E).`,
       { parse_mode: "Markdown" }
     ));
     return;
@@ -221,61 +231,56 @@ bot.onText(/\/register/, async (msg) => {
 });
 
 // ─── MESSAGE HANDLER ─────────────────────────────────────────────────────────
-
 bot.on("message", async (msg) => {
   const userId = msg.from.id;
-  const text = msg.text || "";
+  const text   = msg.text || "";
   if (msg.location || msg.photo || text.startsWith("/")) return;
 
   const state = getUserState(userId);
   await trackAndClean(msg.chat.id, userId, msg.message_id);
 
-  // Flow steps
+  // Mid-flow guards
   if (state.step === "waiting_location") {
     return sendAndClean(msg.chat.id, userId, "📍 Будь ласка, надішліть геолокацію кнопкою нижче.");
   }
-
   if (state.step === "waiting_photos") {
     if (text === "✅ Готово, далі") {
       setUserState(userId, { step: "idle" });
-      return _sendFormLink(msg.chat.id, userId, state.location, state.photos || [], state.role);
+      return _sendFormLink(msg.chat.id, userId, state.location, state.photos || [], state.role, state.mode);
     }
     return sendAndClean(msg.chat.id, userId, "📸 Надішліть фото або натисніть *Готово*.", { parse_mode: "Markdown" });
   }
 
-  // Get role for menu actions
   const role = await getUserRole(userId);
   if (!role || role === "pending") {
-    return sendAndClean(msg.chat.id, userId, "🔒 У вас немає доступу. Надішліть /register.");
+    return sendAndClean(msg.chat.id, userId, "🔒 Немає доступу. Надішліть /register.");
   }
 
-  // Start flow buttons
-  const flowTriggers = ["Агент", "Продавець", "анкету", "Логістика", "Аудит"];
-  if (flowTriggers.some(k => text.includes(k))) {
-    setUserState(userId, { step: "waiting_location", photos: [], role });
+  // Flow trigger buttons
+  const mode = BUTTON_MODES[text];
+  if (mode) {
+    setUserState(userId, { step: "waiting_location", photos: [], role, mode });
     const sent = await bot.sendMessage(msg.chat.id,
-      "📍 *Крок 1 з 2 — Геолокація*\n\nНадішліть вашу поточну геолокацію 👇",
+      "📍 *Крок 1 з 2 — Геолокація*\n\nНадішліть поточну геолокацію 👇",
       { parse_mode: "Markdown", reply_markup: locationKeyboard }
     );
-    await trackAndClean(msg.chat.id, userId, sent.message_id);
-    return;
+    return trackAndClean(msg.chat.id, userId, sent.message_id);
   }
 
-  // Sync button (admin only)
+  // Sync (admin)
   if (text === "🔄 Оновити довідники") {
     if (role !== "admin") return sendAndClean(msg.chat.id, userId, "🔒 Тільки для адміністраторів.");
-    await sendAndClean(msg.chat.id, userId, "🔄 Оновлення довідників...");
-    https.get(SYNC_URL, (res) => {
-      let body = "";
-      res.on("data", chunk => body += chunk);
-      res.on("end", () => sendAndClean(msg.chat.id, userId,
-        body.trim() === "OK" ? "✅ Довідники оновлено!" : "❌ Помилка: " + body
-      ));
-    }).on("error", () => sendAndClean(msg.chat.id, userId, "❌ Не вдалося підключитись."));
+    await sendAndClean(msg.chat.id, userId, "🔄 Оновлення...");
+    try {
+      await httpsGet(FORM_BASE_URL + "?action=sync");
+      sendAndClean(msg.chat.id, userId, "✅ Довідники оновлено!");
+    } catch {
+      sendAndClean(msg.chat.id, userId, "❌ Не вдалося підключитись.");
+    }
     return;
   }
 
-  // Reset chat button
+  // Clear chat
   if (text === "🗑 Очистити чат") {
     await resetChat(msg.chat.id, userId);
     const sent = await bot.sendMessage(msg.chat.id, "🗑 Чат очищено. Виберіть дію:", {
@@ -285,38 +290,35 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // Default: show menu
+  // Fallback
   sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: getMainKeyboard(role) });
 });
 
 // ─── LOCATION ────────────────────────────────────────────────────────────────
-
 bot.on("location", async (msg) => {
   const userId = msg.from.id;
-  const state = getUserState(userId);
+  const state  = getUserState(userId);
   if (state.step !== "waiting_location") return;
 
   await trackAndClean(msg.chat.id, userId, msg.message_id);
   const { latitude, longitude } = msg.location;
-  const mapsLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
 
   setUserState(userId, {
     step: "waiting_photos",
-    location: { latitude, longitude, mapsLink },
+    location: { latitude, longitude, mapsLink: `https://www.google.com/maps?q=${latitude},${longitude}` },
     photos: [],
   });
 
   sendAndClean(msg.chat.id, userId,
-    "✅ Геолокацію отримано!\n\n📸 *Крок 2 з 2 — Фото*\n\nНадішліть фото обладнання.\nКоли закінчите — натисніть *Готово*.",
+    "✅ Геолокацію отримано!\n\n📸 *Крок 2 з 2 — Фото*\n\nНадішліть фото. Коли закінчите — натисніть *Готово*.",
     { parse_mode: "Markdown", reply_markup: donePhotoKeyboard }
   );
 });
 
 // ─── PHOTOS ──────────────────────────────────────────────────────────────────
-
 bot.on("photo", async (msg) => {
   const userId = msg.from.id;
-  const state = getUserState(userId);
+  const state  = getUserState(userId);
   if (state.step !== "waiting_photos") return;
 
   await trackAndClean(msg.chat.id, userId, msg.message_id);
@@ -330,18 +332,55 @@ bot.on("photo", async (msg) => {
   );
 });
 
+// ─── CALLBACK QUERIES (Approve/Reject XO, Confirm Fine Fix) ──────────────────
+bot.on("callback_query", async (query) => {
+  const parts  = query.data.split(":");
+  const action = parts[0];
+  const id     = parts[1];
+  const chatId = query.message.chat.id;
+  const msgId  = query.message.message_id;
+
+  let type, status, confirmText;
+  if      (action === "approve_xo") { type = "xo";   status = "Approved"; confirmText = "✅ Схвалено"; }
+  else if (action === "reject_xo")  { type = "xo";   status = "Rejected"; confirmText = "❌ Відхилено"; }
+  else if (action === "fix_fine")   { type = "fine";  status = "Fixed";    confirmText = "✅ Виправлення підтверджено"; }
+  else { return bot.answerCallbackQuery(query.id); }
+
+  try {
+    const url = `${GAS_URL}?action=updateStatus&type=${type}&id=${encodeURIComponent(id)}&status=${status}`;
+    await httpsGet(url);
+
+    // Remove inline buttons from supervisor's message
+    await bot.editMessageReplyMarkup(
+      { inline_keyboard: [] },
+      { chat_id: chatId, message_id: msgId }
+    );
+
+    // Toast notification to supervisor
+    await bot.answerCallbackQuery(query.id, { text: confirmText, show_alert: false });
+
+    // Append status to the message text
+    const original = query.message.text || query.message.caption || "";
+    await bot.editMessageText(original + `\n\n*${confirmText}*`, {
+      chat_id: chatId, message_id: msgId, parse_mode: "Markdown",
+    });
+  } catch (err) {
+    console.error("callback_query error:", err.message);
+    bot.answerCallbackQuery(query.id, { text: "❌ Помилка оновлення", show_alert: true });
+  }
+});
+
 // ─── SEND FORM LINK ───────────────────────────────────────────────────────────
-
-async function _sendFormLink(chatId, userId, location, photos, role) {
-  const token = `${Date.now()}_${userId}`;
-
-  // Pass token (for session matching), tid (for user identity in form), user (display name)
+async function _sendFormLink(chatId, userId, location, photos, role, mode = "vst") {
+  const token    = `${Date.now()}_${userId}`;
   const userData = await getUserData(userId);
-  const username = userData ? userData.username : "";
-  const formLink = `${FORM_BASE_URL}?token=${token}&tid=${userId}&user=${encodeURIComponent(username)}`;
+  const username = userData?.username || "";
+
+  const formLink =
+    `${FORM_BASE_URL}?token=${token}&tid=${userId}&user=${encodeURIComponent(username)}&mode=${mode}`;
 
   const locationText = location ? `📍 ${location.mapsLink}` : "📍 Геолокація: не надана";
-  const photosText = photos.length > 0 ? `📸 Фото: ${photos.length} шт.` : "📸 Фото: не надані";
+  const photosText   = photos.length ? `📸 Фото: ${photos.length} шт.` : "📸 Фото: не надані";
 
   await sendAndClean(chatId, userId,
     `✅ *Дякую!*\n\n${locationText}\n${photosText}\n\n📝 Тепер заповніть анкету:`,
@@ -351,30 +390,21 @@ async function _sendFormLink(chatId, userId, location, photos, role) {
     }
   );
 
-  // Restore main keyboard
   await sendAndClean(chatId, userId, "Після заповнення можна розпочати новий акт:", {
     reply_markup: getMainKeyboard(role),
   });
 
-  saveSession({
-    userId,
-    token,
-    role,
-    username,
-    timestamp: new Date().toISOString(),
-    location: location || null,
-    photos: photos || [],
-  });
+  saveSession({ userId, token, role, mode, username,
+    timestamp: new Date().toISOString(), location: location || null, photos: photos || [] });
 }
 
-// ─── HTTP SERVER ─────────────────────────────────────────────────────────────
-
+// ─── HTTP SERVER (session endpoint for GAS) ──────────────────────────────────
 http.createServer((req, res) => {
   if (req.url.startsWith("/sessions/latest")) {
-    const url = new URL(req.url, "http://localhost:3000");
-    const token = url.searchParams.get("token");
-    const minutes = parseInt(url.searchParams.get("minutes") || "30");
-    const session = token ? getSessionByToken(token) : getLatestSession(minutes);
+    const url    = new URL(req.url, "http://localhost:3000");
+    const token  = url.searchParams.get("token");
+    const mins   = parseInt(url.searchParams.get("minutes") || "30");
+    const session = token ? getSessionByToken(token) : getLatestSession(mins);
     res.writeHead(session ? 200 : 404, { "Content-Type": "application/json" });
     return res.end(JSON.stringify(session || { error: "Not found" }));
   }
