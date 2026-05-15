@@ -128,6 +128,7 @@ async function registerUser(userId, username) {
 
 // ─── SESSIONS ────────────────────────────────────────────────────────────────
 const sessions = [];
+const pendingApprovals = {};
 
 function saveSession(data) {
   sessions.push(data);
