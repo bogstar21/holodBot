@@ -152,12 +152,26 @@ async function sendAndClean(chatId, userId, text, options = {}) {
 }
 
 // Delete ALL tracked messages and reset user state
-async function resetChat(chatId, userId) {
+// Delete ALL tracked messages in private chat and reset user state
+async function resetChat(chatId, userId, chatType) {
+  // PROTECTION: Only allow deletion if it is a private chat with the bot
+  if (chatType !== 'private') {
+    console.log("Deletion skipped: Topic/Channel history is protected.");
+    return;
+  }
+
   const state = getUserState(userId);
   const history = state.messageHistory || [];
+  
+  // Attempt to delete every message the bot has tracked
   for (const msgId of history) {
-    bot.deleteMessage(chatId, msgId).catch(() => { });
+    bot.deleteMessage(chatId, msgId).catch((err) => {
+      // Messages older than 48h or already deleted will fail silently
+      console.log(`Could not delete msg ${msgId}: ${err.message}`);
+    });
   }
+  
+  // Completely wipe the history from the state file
   clearUserState(userId);
 }
 
@@ -168,8 +182,8 @@ function getMainKeyboard(role) {
     admin: [[{ text: "📦 Агент" }, { text: "📋 Продавець" }], [{ text: "🔄 Оновити довідники" }, { text: "🗑 Очистити чат" }]],
     agent: [[{ text: "📦 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
     seller: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    superviser: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
-    logistic: [[{ text: "🚛 Логістика: Анкета" }], [{ text: "🗑 Очистити чат" }]],
+    supervisor: [[{ text: "📋 Заповнити анкету" }], [{ text: "🗑 Очистити чат" }]],
+    logist: [[{ text: "🚛 Логістика: Анкета" }], [{ text: "🗑 Очистити чат" }]],
     auditor: [[{ text: "🔍 Аудит: Анкета" }], [{ text: "🗑 Очистити чат" }]],
   };
   const rows = kb[role];
@@ -212,7 +226,7 @@ bot.onText(/\/register/, async (msg) => {
   if (result === "registered") {
     sendAndClean(msg.chat.id, userId, "✅ Запит надіслано! Адміністратор розгляне його найближчим часом.");
     ADMIN_IDS.forEach(id => bot.sendMessage(id,
-      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: ${userId}\n\nВідкрийте References sheet → встановіть роль та workId (H col)`,
+      `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: ${userId}\n\nВідкрийте Users sheet → встановіть роль та workId (H col)`,
       { parse_mode: "Markdown" }
     ));
     return;
@@ -275,16 +289,19 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // Reset chat button
+// Reset chat button logic
   if (text === "🗑 Очистити чат") {
-    await resetChat(msg.chat.id, userId);
+    // Pass msg.chat.type to verify it's a private chat
+    await resetChat(msg.chat.id, userId, msg.chat.type); 
+    
     const sent = await bot.sendMessage(msg.chat.id, "🗑 Чат очищено. Виберіть дію:", {
       reply_markup: getMainKeyboard(role),
     });
+    
+    // Start a fresh history with just this new message
     setUserState(userId, { messageHistory: [sent.message_id] });
     return;
   }
-
   // Default: show menu
   sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: getMainKeyboard(role) });
 });
