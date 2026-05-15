@@ -12,7 +12,7 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 const FORM_BASE_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec";
 const STATE_FILE = path.join(__dirname, "state.json");
 const SHEET_ID = "137Dh42K-2VR_J6hPTkH65pWWP6Tl-QTYcTLVU-dhslg";
-const REFERENCES_SHEET = "References";
+const REFERENCES_SHEET = "users";
 const ADMIN_ID = "180881678";           // errors only
 const ADMIN_IDS = ["180881678", "1349356084"]; // registration notifications
 const SYNC_URL = "https://script.google.com/macros/s/AKfycbzGYQ80I62uqO0vZUENqfXENsSilujHYtDoGo3RabVZzlvoJL_ablgN7IjKOhQYo2pwWA/exec?action=sync";
