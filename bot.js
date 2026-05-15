@@ -27,7 +27,20 @@ const BUTTON_MODES = {
 };
 
 // ─── KEYBOARDS ───────────────────────────────────────────────────────────────
+
+// Normalize role — handles spelling variants from the sheet
+function normalizeRole(role) {
+  const r = (role || "").toLowerCase().trim();
+  if (r === "supervisor" || r === "superviser") return "superviser";
+  if (r === "logist" || r === "logistic" || r === "logistics") return "logist";
+  if (r === "auditor" || r === "audit") return "auditor";
+  if (r === "agent") return "agent";
+  if (r === "admin") return "admin";
+  return r;
+}
+
 function getMainKeyboard(role) {
+  const r = normalizeRole(role);
   const rows = {
     admin: [
       [{ text: "📋 Візит" }, { text: "📦 Запит XO" }],
@@ -53,8 +66,7 @@ function getMainKeyboard(role) {
       [{ text: "🗑 Очистити чат" }],
     ],
   };
-  const keyboard = rows[role];
-  if (!keyboard) return null;
+  const keyboard = rows[r] || [[{ text: "🗑 Очистити чат" }]]; // fallback so keyboard never disappears
   return { keyboard, resize_keyboard: true, persistent: true };
 }
 
