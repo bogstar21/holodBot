@@ -138,6 +138,50 @@ async function registerUser(userId, username) {
   }
 }
 
+async function approveUser(telegramId, username, role, name, workId, channel) {
+  try {
+    const sheets = getSheetsClient();
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `${USERS_SHEET}!A2:F200`,
+    });
+    const rows = res.data.values || [];
+    const rowIdx = rows.findIndex(r => r[0]?.toString() === telegramId.toString());
+    if (rowIdx === -1) return false;
+    const sheetRow = rowIdx + 2;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `${USERS_SHEET}!A${sheetRow}:F${sheetRow}`,
+      valueInputOption: "RAW",
+      resource: { values: [[telegramId, username, role, name, workId, channel]] },
+    });
+    return true;
+  } catch (err) {
+    console.error("approveUser error:", err.message);
+    return false;
+  }
+}
+
+function channelKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Ласунка", callback_data: "reg_channel_Ласунка" }],
+      [{ text: "Рудь", callback_data: "reg_channel_Рудь" }],
+      [{ text: "Обидва", callback_data: "reg_channel_Обидва" }],
+    ],
+  };
+}
+
+function roleKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Agent", callback_data: "reg_role_agent" }, { text: "Supervisor", callback_data: "reg_role_superviser" }],
+      [{ text: "Logist", callback_data: "reg_role_logist" }, { text: "Auditor", callback_data: "reg_role_auditor" }],
+      [{ text: "❌ Відхилити", callback_data: "reg_role_reject" }],
+    ],
+  };
+}
+
 // ─── SESSIONS ────────────────────────────────────────────────────────────────
 const sessions = [];
 const pendingApprovals = {};
@@ -176,20 +220,18 @@ function clearUserState(uid) {
   saveState(s);
 }
 
-// ─── CHAT CLEANUP ─────────────────────────────────────────────────────────────
-async function trackAndClean(chatId, userId, msgId) {
+// ─── CHAT TRACKING (no auto-delete) ──────────────────────────────────────────
+function trackMessage(userId, msgId) {
   const state   = getUserState(userId);
   const history = state.messageHistory || [];
   history.push(msgId);
-  while (history.length > MAX_MESSAGES) {
-    bot.deleteMessage(chatId, history.shift()).catch(() => {});
-  }
+  if (history.length > 50) history.splice(0, history.length - 50);
   setUserState(userId, { messageHistory: history });
 }
 
-async function sendAndClean(chatId, userId, text, opts = {}) {
+async function sendTracked(chatId, userId, text, opts = {}) {
   const sent = await bot.sendMessage(chatId, text, opts);
-  await trackAndClean(chatId, userId, sent.message_id);
+  trackMessage(userId, sent.message_id);
   return sent;
 }
 
@@ -216,24 +258,24 @@ bot.onText(/\/start/, async (msg) => {
   clearUserState(userId);
   const role = await getUserRole(userId);
   if (!role || role === "pending") {
-    return sendAndClean(msg.chat.id, userId, "🔒 У вас немає доступу.\n\nНадішліть /register щоб запросити доступ.");
+    return sendTracked(msg.chat.id, userId, "🔒 У вас немає доступу.\n\nНадішліть /register щоб запросити доступ.");
   }
   const kb = getMainKeyboard(role);
-  sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: kb });
+  sendTracked(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: kb });
 });
 
 // ─── /register ───────────────────────────────────────────────────────────────
 bot.onText(/\/register/, async (msg) => {
   const userId   = msg.from.id;
   const username = msg.from.username ? "@" + msg.from.username : msg.from.first_name;
-  await trackAndClean(msg.chat.id, userId, msg.message_id);
+  trackMessage(userId, msg.message_id);
 
   const result = await registerUser(userId, username);
   if (result === "exists") {
-    return sendAndClean(msg.chat.id, userId, "⏳ Ваш запит вже надіслано. Очікуйте підтвердження.");
+    return sendTracked(msg.chat.id, userId, "⏳ Ваш запит вже надіслано. Очікуйте підтвердження.");
   }
   if (result === "registered") {
-    sendAndClean(msg.chat.id, userId, "✅ Запит надіслано! Адміністратор розгляне його найближчим часом.");
+    sendTracked(msg.chat.id, userId, "✅ Запит надіслано! Адміністратор розгляне його найближчим часом.");
     ADMIN_IDS.forEach(id => bot.sendMessage(id,
       `🔔 *Новий запит на доступ*\n\n👤 ${username}\n🆔 ID: \`${userId}\`\n\nВстановіть роль у Users sheet (col C) та workId (col E).`,
       { parse_mode: "Markdown" }
@@ -241,7 +283,7 @@ bot.onText(/\/register/, async (msg) => {
     return;
   }
 
-  sendAndClean(msg.chat.id, userId, "❌ Помилка реєстрації. Спробуйте пізніше.");
+  sendTracked(msg.chat.id, userId, "❌ Помилка реєстрації. Спробуйте пізніше.");
 });
 
 // ─── CALLBACK QUERIES ────────────────────────────────────────────────────────
@@ -348,6 +390,7 @@ bot.on("callback_query", async (query) => {
 
 // ─── MESSAGE HANDLER ─────────────────────────────────────────────────────────
 bot.on("message", async (msg) => {
+  if (msg.chat.type !== "private") return;
   const userId = msg.from.id;
   const text   = msg.text || "";
   if (msg.location || msg.photo || text.startsWith("/")) return;
@@ -381,23 +424,23 @@ bot.on("message", async (msg) => {
 
   // ── Regular user flow ─────────────────────────────────────────────────────
   const state = getUserState(userId);
-  await trackAndClean(msg.chat.id, userId, msg.message_id);
+  trackMessage(userId, msg.message_id);
 
   // Mid-flow guards
   if (state.step === "waiting_location") {
-    return sendAndClean(msg.chat.id, userId, "📍 Будь ласка, надішліть геолокацію кнопкою нижче.");
+    return sendTracked(msg.chat.id, userId, "📍 Будь ласка, надішліть геолокацію кнопкою нижче.");
   }
   if (state.step === "waiting_photos") {
     if (text === "✅ Готово, далі") {
       setUserState(userId, { step: "idle" });
       return _sendFormLink(msg.chat.id, userId, state.location, state.photos || [], state.role, state.mode);
     }
-    return sendAndClean(msg.chat.id, userId, "📸 Надішліть фото або натисніть *Готово*.", { parse_mode: "Markdown" });
+    return sendTracked(msg.chat.id, userId, "📸 Надішліть фото або натисніть *Готово*.", { parse_mode: "Markdown" });
   }
 
   const role = await getUserRole(userId);
   if (!role || role === "pending") {
-    return sendAndClean(msg.chat.id, userId, "🔒 Немає доступу. Надішліть /register.");
+    return sendTracked(msg.chat.id, userId, "🔒 Немає доступу. Надішліть /register.");
   }
 
   // Flow trigger buttons
@@ -408,18 +451,19 @@ bot.on("message", async (msg) => {
       "📍 *Крок 1 з 2 — Геолокація*\n\nНадішліть поточну геолокацію 👇",
       { parse_mode: "Markdown", reply_markup: locationKeyboard }
     );
-    return trackAndClean(msg.chat.id, userId, sent.message_id);
+    trackMessage(userId, sent.message_id);
+    return;
   }
 
   // Sync (admin)
   if (text === "🔄 Оновити довідники") {
-    if (role !== "admin") return sendAndClean(msg.chat.id, userId, "🔒 Тільки для адміністраторів.");
-    await sendAndClean(msg.chat.id, userId, "🔄 Оновлення...");
+    if (role !== "admin") return sendTracked(msg.chat.id, userId, "🔒 Тільки для адміністраторів.");
+    await sendTracked(msg.chat.id, userId, "🔄 Оновлення...");
     try {
       await httpsGet(FORM_BASE_URL + "?action=sync");
-      sendAndClean(msg.chat.id, userId, "✅ Довідники оновлено!");
+      sendTracked(msg.chat.id, userId, "✅ Довідники оновлено!");
     } catch {
-      sendAndClean(msg.chat.id, userId, "❌ Не вдалося підключитись.");
+      sendTracked(msg.chat.id, userId, "❌ Не вдалося підключитись.");
     }
     return;
   }
@@ -435,16 +479,17 @@ bot.on("message", async (msg) => {
   }
 
   // Fallback
-  sendAndClean(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: getMainKeyboard(role) });
+  sendTracked(msg.chat.id, userId, "👋 Виберіть дію:", { reply_markup: getMainKeyboard(role) });
 });
 
 // ─── LOCATION ────────────────────────────────────────────────────────────────
 bot.on("location", async (msg) => {
+  if (msg.chat.type !== "private") return;
   const userId = msg.from.id;
   const state  = getUserState(userId);
   if (state.step !== "waiting_location") return;
 
-  await trackAndClean(msg.chat.id, userId, msg.message_id);
+  trackMessage(userId, msg.message_id);
   const { latitude, longitude } = msg.location;
 
   setUserState(userId, {
@@ -453,7 +498,7 @@ bot.on("location", async (msg) => {
     photos: [],
   });
 
-  sendAndClean(msg.chat.id, userId,
+  sendTracked(msg.chat.id, userId,
     "✅ Геолокацію отримано!\n\n📸 *Крок 2 з 2 — Фото*\n\nНадішліть фото. Коли закінчите — натисніть *Готово*.",
     { parse_mode: "Markdown", reply_markup: donePhotoKeyboard }
   );
@@ -461,16 +506,17 @@ bot.on("location", async (msg) => {
 
 // ─── PHOTOS ──────────────────────────────────────────────────────────────────
 bot.on("photo", async (msg) => {
+  if (msg.chat.type !== "private") return;
   const userId = msg.from.id;
   const state  = getUserState(userId);
   if (state.step !== "waiting_photos") return;
 
-  await trackAndClean(msg.chat.id, userId, msg.message_id);
+  trackMessage(userId, msg.message_id);
   const photos = state.photos || [];
   photos.push(msg.photo[msg.photo.length - 1].file_id);
   setUserState(userId, { photos });
 
-  sendAndClean(msg.chat.id, userId,
+  sendTracked(msg.chat.id, userId,
     `📸 Фото ${photos.length} отримано! Надішліть ще або натисніть *Готово*.`,
     { parse_mode: "Markdown", reply_markup: donePhotoKeyboard }
   );
@@ -491,7 +537,7 @@ bot.on("callback_query", async (query) => {
   else { return bot.answerCallbackQuery(query.id); }
 
   try {
-    const url = `${GAS_URL}?action=updateStatus&type=${type}&id=${encodeURIComponent(id)}&status=${status}`;
+    const url = `${GAS_URL}?action=updateStatus&type=${type}&id=${encodeURIComponent(id)}&status=${status}&sup_id=${query.from.id}`;
     await httpsGet(url);
 
     // Remove inline buttons from supervisor's message
@@ -526,7 +572,7 @@ async function _sendFormLink(chatId, userId, location, photos, role, mode = "vst
   const locationText = location ? `📍 ${location.mapsLink}` : "📍 Геолокація: не надана";
   const photosText   = photos.length ? `📸 Фото: ${photos.length} шт.` : "📸 Фото: не надані";
 
-  await sendAndClean(chatId, userId,
+  await sendTracked(chatId, userId,
     `✅ *Дякую!*\n\n${locationText}\n${photosText}\n\n📝 Тепер заповніть анкету:`,
     {
       parse_mode: "Markdown",
@@ -534,7 +580,7 @@ async function _sendFormLink(chatId, userId, location, photos, role, mode = "vst
     }
   );
 
-  await sendAndClean(chatId, userId, "Після заповнення можна розпочати новий акт:", {
+  await sendTracked(chatId, userId, "Після заповнення можна розпочати новий акт:", {
     reply_markup: getMainKeyboard(role),
   });
 
